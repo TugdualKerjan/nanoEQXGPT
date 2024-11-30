@@ -10,6 +10,7 @@ import numpy as np
 import optax
 import tiktoken
 import tensorboardX
+import jax.tree_util as jtu
 from model import GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
@@ -171,10 +172,13 @@ if init_from == "resume":
         with open(filename, "rb") as f:
             checkpoint_params = json.loads(f.readline().decode())
             gptconf = GPTConfig(**checkpoint_params["model_args"])
+            modded = GPT.create_instance(gptconf, key=jax.random.key(1))
+            wte2 = modded.wte2
+            vanilla = eqx.tree_at(lambda tree: tree.wte2, modded, None)
+            print(f"Vanilla pytree without wte: {vanilla}")
+            vanilla = eqx.tree_deserialise_leaves(f, vanilla)
             return (
-                eqx.tree_deserialise_leaves(
-                    f, GPT.create_instance(gptconf, key=jax.random.key(1))
-                ),
+                eqx.tree_at(lambda tree: tree.wte2, vanilla, wte2, is_leaf=lambda x: x is None),
                 checkpoint_params,
             )
 
@@ -243,7 +247,7 @@ if wandb_log:
 
 if tensorboard_log:
     from tensorboardX import SummaryWriter
-    writer = SummaryWriter(log_dir='./runs/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+    writer = SummaryWriter(log_dir='./runs/exp2/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
 
 print("👀 Starting run !")
 

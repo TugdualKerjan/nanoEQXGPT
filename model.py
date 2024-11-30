@@ -137,6 +137,7 @@ class GPT(eqx.Module):
     lm_head: nn.Linear
     wpe: nn.Embedding
     wte: nn.Embedding
+    wte2: nn.Embedding
     drop: nn.Dropout
     ln_f: nn.LayerNorm
 
@@ -155,7 +156,7 @@ class GPT(eqx.Module):
         self.ln_f = nn.LayerNorm(config.n_embd, use_bias=config.bias)
 
         # Use weight typing
-
+        self.wte2 = nn.Embedding(config.vocab_size, config.n_embd, key=key1)
         self.wte = nn.Embedding(config.vocab_size, config.n_embd, key=key1)
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, use_bias=False, key=key4)
 
@@ -172,7 +173,10 @@ class GPT(eqx.Module):
         # Should use better positional embeddings with cos and sin.
         pos = jnp.arange(0, t)
         # pos = jnp.arange(0, self.config.block_size)
+        mask = jax.random.bernoulli(key, 0.5, shape=(t,1))
         tok_emb = jax.vmap(self.wte)(x)
+        tok_emb2 = jax.vmap(self.wte2)(x)
+        tok_emb = jnp.where(mask, tok_emb, tok_emb2)
         pos_emb = jax.vmap(self.wpe)(pos)
         x = tok_emb + pos_emb
 
