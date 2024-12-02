@@ -173,18 +173,18 @@ if init_from == "resume":
             checkpoint_params = json.loads(f.readline().decode())
             gptconf = GPTConfig(**checkpoint_params["model_args"])
             model = GPT(gptconf, key=jax.random.key(1))
-            model = eqx.tree_deserialise_leaves(f, model)
+            # model = eqx.tree_deserialise_leaves(f, model)
 
             wte = model.wte
             new_wte = eqx.nn.Embedding(gptconf.vocab_size*2, gptconf.n_embd, jax.numpy.concat([wte.weight, jr.normal(
-                key, (gptconf.vocab_size, gptconf.n_embd)
-            )]))
+                key, (gptconf.vocab_size, gptconf.n_embd) 
+            )* jnp.var(wte.weight) + jnp.mean(wte.weight)])) # Init with same mean and var as base model.
             model = eqx.tree_at(lambda tree: tree.wte, model, new_wte)
 
             lm_head = model.lm_head
-            new_weight = jnp.concat([lm_head.weight, jr.normal(key, (gptconf.vocab_size, gptconf.n_embd))])
+            new_weight = jnp.concat([lm_head.weight, jr.normal(key, (gptconf.vocab_size, gptconf.n_embd) )* jnp.var(lm_head.weight) + jnp.mean(lm_head.weight)])
             if model_args["bias"]:
-                new_bias = jnp.concat([lm_head.bias, jr.normal(key, (gptconf.vocab_size,))])
+                new_bias = jnp.concat([lm_head.bias, jr.normal(key, (gptconf.vocab_size,))* jnp.var(lm_head.bias)+jnp.mean(lm_head.bias)])
             else:
                 new_bias = None
                 
@@ -224,17 +224,17 @@ print("✅ Optimizer initialized !")
 @eqx.filter_jit
 def compute_loss(model, x, y, key):
     
-    # language_per_sequence = jr.bernoulli(key, 0.5, (x.shape[0], 1)) * model_args["vocab_size"]
+    language_per_sequence = jr.bernoulli(key, 0.5, (x.shape[0], 1)) * model_args["vocab_size"]
     # print(language_per_sequence)
-    # x = x + language_per_sequence
-    # y = y + language_per_sequence
+    x = x + language_per_sequence
+    y = y + language_per_sequence
     keys = jax.random.split(key, x.shape[0])
     logits = jax.vmap(model, in_axes=(0, None, 0))(x, True, keys)
     print(logits.shape)
-    norm_attempt = logits[:, :, :model_args["vocab_size"]]
+    # logits = logits[:, :, :model_args["vocab_size"]]
 
     loss = optax.softmax_cross_entropy_with_integer_labels(
-        logits=norm_attempt,
+        logits=logits,
         labels=y,
     )
 
