@@ -12,7 +12,7 @@ import tiktoken
 import tensorboardX
 import jax.tree_util as jtu
 from model import GPTConfig, GPT
-
+import jax.random as jr
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -26,8 +26,8 @@ init_from = "scratch"  # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
 wandb_log = False  # disabled by default
 tensorboard_log = True  # disabled by default
-log_project = "exp1"
-log_run_name = "gpt2"  # 'run' + str(time.time())
+log_project = "exp2"
+log_run_name = "secondrunwithrandomized"  # 'run' + str(time.time())
 # data
 dataset = "tinystories"
 gradient_accumulation_steps = 1  # used to simulate larger batch sizes
@@ -97,8 +97,8 @@ def get_batch(split: str):
         )
 
     ix = np.random.randint(len(data) - block_size, size=(batch_size,))
-    x = jnp.stack([jnp.array(data[i : i + block_size]) for i in ix])
-    y = jnp.stack([jnp.array(data[i + 1 : i + 1 + block_size]) for i in ix])
+    x = jnp.stack([jnp.array(data[i : i + block_size], dtype=jnp.uint32) for i in ix])
+    y = jnp.stack([jnp.array(data[i + 1 : i + 1 + block_size], dtype=jnp.uint32) for i in ix])
 
     return x, y
 
@@ -172,13 +172,25 @@ if init_from == "resume":
         with open(filename, "rb") as f:
             checkpoint_params = json.loads(f.readline().decode())
             gptconf = GPTConfig(**checkpoint_params["model_args"])
-            modded = GPT.create_instance(gptconf, key=jax.random.key(1))
-            wte2 = modded.wte2
-            vanilla = eqx.tree_at(lambda tree: tree.wte2, modded, None)
-            print(f"Vanilla pytree without wte: {vanilla}")
-            vanilla = eqx.tree_deserialise_leaves(f, vanilla)
+            model = GPT(gptconf, key=jax.random.key(1))
+            model = eqx.tree_deserialise_leaves(f, model)
+
+            wte = model.wte
+            new_wte = eqx.nn.Embedding(gptconf.vocab_size*2, gptconf.n_embd, jax.numpy.concat([wte.weight, jr.normal(
+                key, (gptconf.vocab_size, gptconf.n_embd)
+            )]))
+            model = eqx.tree_at(lambda tree: tree.wte, model, new_wte)
+
+            lm_head = model.lm_head
+            new_weight = jnp.concat([lm_head.weight, jr.normal(key, (gptconf.vocab_size, gptconf.n_embd))])
+            if model_args["bias"]:
+                new_bias = jnp.concat([lm_head.bias, jr.normal(key, (gptconf.vocab_size,))])
+            else:
+                new_bias = None
+                
+            model = eqx.tree_at(lambda tree: [tree.lm_head.weight, tree.lm_head.bias], model, [new_weight, new_bias], is_leaf=lambda x: x is None)
             return (
-                eqx.tree_at(lambda tree: tree.wte2, vanilla, wte2, is_leaf=lambda x: x is None),
+                model,
                 checkpoint_params,
             )
 
@@ -211,11 +223,18 @@ print("✅ Optimizer initialized !")
 
 @eqx.filter_jit
 def compute_loss(model, x, y, key):
+    
+    # language_per_sequence = jr.bernoulli(key, 0.5, (x.shape[0], 1)) * model_args["vocab_size"]
+    # print(language_per_sequence)
+    # x = x + language_per_sequence
+    # y = y + language_per_sequence
     keys = jax.random.split(key, x.shape[0])
     logits = jax.vmap(model, in_axes=(0, None, 0))(x, True, keys)
+    print(logits.shape)
+    norm_attempt = logits[:, :, :model_args["vocab_size"]]
 
     loss = optax.softmax_cross_entropy_with_integer_labels(
-        logits=logits,
+        logits=norm_attempt,
         labels=y,
     )
 
