@@ -63,6 +63,7 @@ dtype = (
     # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 )
 seed = 1
+meta_vocab_size = 512
 # -----------------------------------------------------------------------------
 config_keys = [
     k
@@ -122,7 +123,6 @@ def convert_model_to_dtype(model, dtype: str):
 
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, "meta.pkl")
-meta_vocab_size = None
 if os.path.exists(meta_path):
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)

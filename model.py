@@ -334,9 +334,8 @@ class GPT(eqx.Module):
 
         return idx
 
-    @staticmethod
     @eqx.filter_jit
-    def sparsemax(input: jax.Array, marg):
+    def sparsemax(self, input: jax.Array, marg):
         arr = jnp.sort(input, descending=True)
         y = marg + jnp.arange(1, arr.shape[0] + 1) * arr
         sum = jnp.cumsum(arr)
@@ -347,16 +346,15 @@ class GPT(eqx.Module):
         thresh = (sum[k_z] - marg) / (k_z + 1)
         return jnp.where(jnp.greater(input - thresh, 0), input - thresh, 0)
 
-    @staticmethod
     @eqx.filter_jit
-    def sinkhorn(X, mu, nu):
+    def sinkhorn(self, X, mu, nu):
         P = jnp.ones_like(X) / mu.shape[0]  # Divide by v
         Q = jnp.zeros_like(X)
-        for _ in range(0, 3):
-            Y = jax.vmap(GPT.sparsemax, in_axes=(0, 0))(X + P, mu)
+        for _ in range(0, 0):
+            Y = jax.vmap(GPT.sparsemax, in_axes=(None, 0, 0))(self, X + P, mu)
             P = X + P - Y
             X = jnp.transpose(
-                jax.vmap(GPT.sparsemax, in_axes=(0, 0))(jnp.transpose(Y + Q), nu)
+                jax.vmap(GPT.sparsemax, in_axes=(None, 0, 0))(self, jnp.transpose(Y + Q), nu)
             )
             Q = Y + Q - X
         return X
