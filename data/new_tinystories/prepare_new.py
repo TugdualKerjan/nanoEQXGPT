@@ -12,7 +12,7 @@ from datasets import load_dataset # huggingface datasets
 num_proc = 16
 
 dataset = load_dataset("roneneldan/TinyStories")
-tokenizer = Tokenizer.from_file("data/tinystories/tokenizer-tinystories.json")
+tokenizer = Tokenizer.from_file("data/new_tinystories/tokenizer-tinystories.json")
 
 # we now want to tokenize the dataset. first define the encoding function (gpt2 bpe)
 def process(example):

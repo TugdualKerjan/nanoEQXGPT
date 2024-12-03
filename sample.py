@@ -11,7 +11,7 @@ from model import GPTConfig, GPT
 init_from = (
     "resume"  # either 'resume' (from an out_dir) or a gpt2 variant (e.g. 'gpt2-xl')
 )
-out_dir = "out-tinystories"  # ignored if init_from is not 'resume'
+out_path = "out-tinystories/model.eqx"  # ignored if init_from is not 'resume'
 start = "Once upon"  # or "<|endoftext|>" or etc. Can also specify a file, use as: "FILE:prompt.txt"
 num_samples = 1  # number of samples to draw
 max_new_tokens = 6  # number of tokens generated in each sample
@@ -43,7 +43,7 @@ def load(filename):
         )
 
 
-model, checkpoint = load(os.path.join(out_dir, "model.eqx"))
+model, checkpoint = load(out_path)
 model = eqx.nn.inference_mode(model)
 
 
@@ -93,5 +93,4 @@ for _ in range(max_new_tokens):
 
     # append sampled index to the running sequence and continue
     idx = jnp.concat((idx, idx_next), axis=-1)
-    print(decode(idx[0]))
-    
+    print(idx)
