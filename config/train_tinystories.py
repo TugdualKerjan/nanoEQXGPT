@@ -11,6 +11,8 @@ always_save_checkpoint = False
 
 wandb_log = False # override via command line if you like
 tensorboard_log = True # override via command line if you like
+log_project = "exp3"
+log_run_name = "train_new_tokenzie"  # 'run' + str(time.time())
 
 dataset = 'tinystories'
 gradient_accumulation_steps = 1
