@@ -120,7 +120,6 @@ def convert_model_to_dtype(model, dtype: str):
         model = convert_pytree_to_dtype(model, jnp.float32)
 
 
-
 # attempt to derive vocab_size from the dataset
 meta_path = os.path.join(data_dir, "meta.pkl")
 meta_vocab_size = None
@@ -161,7 +160,7 @@ if init_from == "scratch":
         )
     model_args["vocab_size"] = meta_vocab_size if meta_vocab_size is not None else 50304
     gptconf = GPTConfig(**model_args)
-    model = GPT(gptconf, key=key) # TODO Serious issue with weight initialization...
+    model = GPT(gptconf, key=key)  # TODO Serious issue with weight initialization...
     model = eqx.nn.inference_mode(model, False)
 
 if init_from == "resume":
@@ -198,7 +197,7 @@ lr_scheduler = optax.warmup_cosine_decay_schedule(
 
 optimizer = optax.inject_hyperparams(optax.adamw)(
     learning_rate=learning_rate
-) # TOODO BETA AND LR SCHED
+)  # TOODO BETA AND LR SCHED
 # if grad_clip != 0.0:
 #     optimizer = optax.chain(optax.adaptive_grad_clip(grad_clip), optimizer)
 
@@ -239,18 +238,22 @@ optimizer_state = optimizer.init(eqx.filter(model, eqx.is_array))
 # logging
 if wandb_log:
     import wandb
+
     wandb.init(project=log_project, name=log_run_name, config=config)
 
 if tensorboard_log:
     from tensorboardX import SummaryWriter
-    writer = SummaryWriter(log_dir='./runs/' + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+
+    writer = SummaryWriter(
+        log_dir="./runs/" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    )
 
 print("👀 Starting run !")
 
 x, y = get_batch("train")
 t0 = time.time()
 running_mfu = -1.0
-for local_iter_num in range(iter_num, max_iters+1):
+for local_iter_num in range(iter_num, max_iters + 1):
     # TODO: Chec`k if this is async prefetching the next batch.
     # do a training step
     if local_iter_num % eval_interval == 0:
@@ -259,8 +262,9 @@ for local_iter_num in range(iter_num, max_iters+1):
             wandb.log(  # type: ignore
                 {
                     "eval/loss": losses["val"],
-                }, step=local_iter_num
-            )            
+                },
+                step=local_iter_num,
+            )
         if losses["val"] < best_val_loss or always_save_checkpoint:
             # There has to be an easier way to get the count from the hyperparameters...
             # filtering = (
@@ -273,7 +277,7 @@ for local_iter_num in range(iter_num, max_iters+1):
                 "model_args": model_args,
                 # "iter_num": iter_num,
                 # "best_val_loss": best_val_loss,
-               "config": config,
+                "config": config,
             }
             print(f"saving checkpoint to {out_path}")
 
@@ -287,7 +291,7 @@ for local_iter_num in range(iter_num, max_iters+1):
 
     if local_iter_num == 0 and eval_only:
         break
-    
+
     accumulated_grads = None
     total_loss = 0
     # for micro_step in range(gradient_accumulation_steps):
@@ -298,8 +302,9 @@ for local_iter_num in range(iter_num, max_iters+1):
         wandb.log(  # type: ignore
             {
                 "train/loss": loss,
-            }, step=local_iter_num
-        )   
+            },
+            step=local_iter_num,
+        )
     # print(loss)
     # total_loss += loss / gradient_accumulation_steps
     # if accumulated_grads == None:
@@ -311,8 +316,7 @@ for local_iter_num in range(iter_num, max_iters+1):
     # accumulated_grads = jax.tree.map(
     #     lambda g: g / gradient_accumulation_steps, accumulated_grads
     # )
-    updates, optimizer_state = optimizer.update(
-        grads, optimizer_state, model)
+    updates, optimizer_state = optimizer.update(grads, optimizer_state, model)
 
     model = eqx.apply_updates(model, updates)
     # TODO: micro batching, gradient accumulation... prob sum the trees
@@ -323,7 +327,7 @@ for local_iter_num in range(iter_num, max_iters+1):
     t1 = time.time()
     dt = t1 - t0
     t0 = t1
-    
+
     if local_iter_num % log_interval == 0:
         total_loss = total_loss * gradient_accumulation_steps
         if local_iter_num > 1000:

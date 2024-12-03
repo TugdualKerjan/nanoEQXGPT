@@ -139,6 +139,10 @@ class GPT(eqx.Module):
     wte: nn.Embedding
     drop: nn.Dropout
     ln_f: nn.LayerNorm
+    cost_matrix = jax.Array
+
+    mu: jax.Array = eqx.field(static=True)
+    nu: jax.Array = eqx.field(static=True)
 
     config: GPTConfig = eqx.field(static=True)
 
@@ -154,10 +158,17 @@ class GPT(eqx.Module):
         self.drop = nn.Dropout(config.dropout)
         self.ln_f = nn.LayerNorm(config.n_embd, use_bias=config.bias)
 
+        self.cost_matrix = jax.random.normal(
+            key=jax.random.key(1), shape=(config.vocab_size, config.vocab_size)
+        )
+        self.mu = jnp.ones(config.vocab_size) / config.vocab_size
+        self.nu = jnp.ones(config.vocab_size) / config.vocab_size
         # Use weight typing
 
         self.wte = nn.Embedding(config.vocab_size, config.n_embd, key=key1)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, use_bias=False, key=key4)
+        self.lm_head = nn.Linear(
+            config.n_embd, config.vocab_size, use_bias=False, key=key4
+        )
 
         # where = lambda embed_and_lin: embed_and_lin[1].weight
         # get = lambda embed_and_lin: embed_and_lin[0].weight
@@ -172,6 +183,9 @@ class GPT(eqx.Module):
         # Should use better positional embeddings with cos and sin.
         pos = jnp.arange(0, t)
         # pos = jnp.arange(0, self.config.block_size)
+        p = self.sinkhorn(self.cost_matrix, self.mu, self.nu)
+        x = jax.vmap(p)(x)
+
         tok_emb = jax.vmap(self.wte)(x)
         pos_emb = jax.vmap(self.wpe)(pos)
         x = tok_emb + pos_emb
@@ -318,3 +332,30 @@ class GPT(eqx.Module):
             idx = jnp.concat((idx, idx_next), axis=-1)
 
         return idx
+
+    @staticmethod
+    @jax.jit
+    def sparsemax(input: jax.Array, marg):
+        arr = jnp.sort(input, descending=True)
+        y = marg + jnp.arange(1, arr.shape[0] + 1) * arr
+        sum = jnp.cumsum(arr)
+        k_z = (
+            jnp.count_nonzero(jnp.where(jnp.greater(y - sum, 0), y - sum, 0)) - 1
+        )  # Makes sure that if two elements are equal we take the latter.
+
+        thresh = (sum[k_z] - marg) / (k_z + 1)
+        return jnp.where(jnp.greater(input - thresh, 0), input - thresh, 0)
+
+    @staticmethod
+    @jax.jit
+    def sinkhorn(X, mu, nu):
+        P = jnp.ones_like(X) / mu.shape[0]  # Divide by v
+        Q = jnp.zeros_like(X)
+        for _ in range(0, 3):
+            Y = jax.vmap(GPT.sparsemax, in_axes=(0, 0))(X + P, mu)
+            P = X + P - Y
+            X = jnp.transpose(
+                jax.vmap(GPT.sparsemax, in_axes=(0, 0))(jnp.transpose(Y + Q), nu)
+            )
+            Q = Y + Q - X
+        return X
