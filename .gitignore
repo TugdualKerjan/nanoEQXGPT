@@ -5,3 +5,4 @@ data/tinystories/**
 !exp.ipynb
 runs/*
 wandb/*
+**.bin
