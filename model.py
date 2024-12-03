@@ -139,12 +139,12 @@ class GPT(eqx.Module):
     wte: nn.Embedding
     drop: nn.Dropout
     ln_f: nn.LayerNorm
-    cost_matrix = jax.Array
+
+    config: GPTConfig = eqx.field(static=True)
+    cost_matrix: jax.Array
 
     mu: jax.Array = eqx.field(static=True)
     nu: jax.Array = eqx.field(static=True)
-
-    config: GPTConfig = eqx.field(static=True)
 
     def __init__(self, config, key=None):
         key1, key2, key3, key4 = jax.random.split(key, 4)
@@ -184,9 +184,10 @@ class GPT(eqx.Module):
         pos = jnp.arange(0, t)
         # pos = jnp.arange(0, self.config.block_size)
         p = self.sinkhorn(self.cost_matrix, self.mu, self.nu)
-        x = jax.vmap(p)(x)
+        x = p[x]
 
-        tok_emb = jax.vmap(self.wte)(x)
+        tok_emb = jax.numpy.matmul(x, self.wte.weight)
+        print(tok_emb)
         pos_emb = jax.vmap(self.wpe)(pos)
         x = tok_emb + pos_emb
 
@@ -334,7 +335,7 @@ class GPT(eqx.Module):
         return idx
 
     @staticmethod
-    @jax.jit
+    @eqx.filter_jit
     def sparsemax(input: jax.Array, marg):
         arr = jnp.sort(input, descending=True)
         y = marg + jnp.arange(1, arr.shape[0] + 1) * arr
@@ -347,7 +348,7 @@ class GPT(eqx.Module):
         return jnp.where(jnp.greater(input - thresh, 0), input - thresh, 0)
 
     @staticmethod
-    @jax.jit
+    @eqx.filter_jit
     def sinkhorn(X, mu, nu):
         P = jnp.ones_like(X) / mu.shape[0]  # Divide by v
         Q = jnp.zeros_like(X)
