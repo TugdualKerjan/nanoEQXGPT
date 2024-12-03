@@ -170,10 +170,37 @@ if init_from == "resume":
         with open(filename, "rb") as f:
             checkpoint_params = json.loads(f.readline().decode())
             gptconf = GPTConfig(**checkpoint_params["model_args"])
+
+            model = GPT.create_instance(gptconf, key=jax.random.key(1))
+            cost_matrix = model.cost_matrix
+            mu = model.mu
+            nu = model.nu
+
+            def mod(path, x):
+                if "mu" in jax.tree_util.keystr(path):
+                    return None
+                if "nu" in jax.tree_util.keystr(path):
+                    return None
+                if "cost_matrix" in jax.tree_util.keystr(path):
+                    return None
+                return x
+
+            model = jax.tree_util.tree_map_with_path(mod, model)
+            model = eqx.tree_deserialise_leaves(f, model)
+
+            def pouet(path, x):
+                if "mu" in jax.tree_util.keystr(path):
+                    return mu
+                if "nu" in jax.tree_util.keystr(path):
+                    return nu
+                if "cost_matrix" in jax.tree_util.keystr(path):
+                    return cost_matrix
+                return x
+
+            model = jax.tree_util.tree_map_with_path(pouet, model)
+
             return (
-                eqx.tree_deserialise_leaves(
-                    f, GPT.create_instance(gptconf, key=jax.random.key(1))
-                ),
+                model,
                 checkpoint_params,
             )
 
