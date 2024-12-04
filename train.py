@@ -83,24 +83,29 @@ ptdtype = {"float32": jnp.float32, "bfloat16": jnp.bfloat16, "float16": jnp.floa
     dtype
 ]
 
-data_dir = os.path.join("data", dataset)
-
+small_data_dir = "data/new_tinystories"
+large_data_dir = "data/tinystories"
 
 def get_batch(split: str):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == "train":
-        data = np.memmap(os.path.join(data_dir, "train.bin"), dtype=np.uint16, mode="r")
+        small_data = np.memmap(os.path.join(small_data_dir, "train.bin"), dtype=np.uint16, mode="r")
+        large_data = np.memmap(os.path.join(large_data_dir, "train.bin"), dtype=np.uint16, mode="r")
     else:
-        data = np.memmap(
-            os.path.join(data_dir, "validation.bin"), dtype=np.uint16, mode="r"
+        small_data = np.memmap(
+            os.path.join(small_data_dir, "validation.bin"), dtype=np.uint16, mode="r"
+        )
+        large_data = np.memmap(
+            os.path.join(large_data_dir, "validation.bin"), dtype=np.uint16, mode="r"
         )
 
-    ix = np.random.randint(len(data) - block_size, size=(batch_size,))
-    x = jnp.stack([jnp.array(data[i : i + block_size]) for i in ix])
-    y = jnp.stack([jnp.array(data[i + 1 : i + 1 + block_size]) for i in ix])
+    ix = np.random.randint(len(large_data) - block_size, size=(batch_size,))
+    x = jnp.stack([jnp.array(small_data[i : i + block_size]) for i in ix])
+    enc_x = jnp.stack([jnp.array(large_data[i : i + block_size]) for i in ix])
+    y = jnp.stack([jnp.array(small_data[i + 1 : i + 1 + block_size]) for i in ix])
 
-    return x, y
+    return x, enc_x, y
 
 
 def convert_model_to_dtype(model, dtype: str):
@@ -122,7 +127,7 @@ def convert_model_to_dtype(model, dtype: str):
 
 
 # attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, "meta.pkl")
+meta_path = os.path.join(large_data_dir, "meta.pkl")
 if os.path.exists(meta_path):
     with open(meta_path, "rb") as f:
         meta = pickle.load(f)
@@ -238,9 +243,9 @@ print("✅ Optimizer initialized !")
 
 
 @eqx.filter_jit
-def compute_loss(model, x, y, key):
+def compute_loss(model, x, x_enc, y, key):
     keys = jax.random.split(key, x.shape[0])
-    logits = jax.vmap(model, in_axes=(0, 0, None, 0))(x, x, True, keys)
+    logits = jax.vmap(model, in_axes=(0, 0, None, 0))(x, x_enc, True, keys)
 
     loss = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits,
@@ -256,9 +261,9 @@ def estimate_loss(model):
     for split in ["train", "val"]:
         losses = jnp.zeros(eval_iters)
         for k in range(eval_iters):
-            x, y = get_batch(split)
+            x, x_enc, y = get_batch(split)
             loss = compute_loss(
-                model, jax.lax.stop_gradient(x), y, key=jax.random.key(1)
+                model, jax.lax.stop_gradient(x), jax.lax.stop_gradient(x_enc), y, key=jax.random.key(1)
             )
             losses = losses.at[k].set(loss.item())
         out[split] = jnp.mean(losses)
@@ -283,7 +288,7 @@ if tensorboard_log:
 
 print("👀 Starting run !")
 
-x, y = get_batch("train")
+x, x_enc,  y = get_batch("train")
 t0 = time.time()
 running_mfu = -1.0
 for local_iter_num in range(iter_num, max_iters + 1):
@@ -329,8 +334,8 @@ for local_iter_num in range(iter_num, max_iters + 1):
     total_loss = 0
     # for micro_step in range(gradient_accumulation_steps):
     key, k = jax.random.split(key)
-    x, y = get_batch("train")
-    loss, grads = eqx.filter_value_and_grad(compute_loss)(model, x, y, k)
+    x, x_enc, y = get_batch("train")
+    loss, grads = eqx.filter_value_and_grad(compute_loss)(model, x, x_enc, y, k)
     if wandb_log:
         wandb.log(  # type: ignore
             {
