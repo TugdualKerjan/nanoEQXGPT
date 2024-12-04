@@ -6,3 +6,4 @@ data/tinystories/**
 runs/*
 wandb/*
 **.bin
+.vscode/launch.json

@@ -12,8 +12,9 @@ import jax
 @dataclass
 class GPTConfig:
     block_size: int = 100
+    new_vocab_size: int = 50304 # From first tokenizer new_model.eqx
     vocab_size: int = (
-        50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
+        512  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     )
     n_layer: int = 12
     n_head: int = 12
@@ -159,9 +160,9 @@ class GPT(eqx.Module):
         self.ln_f = nn.LayerNorm(config.n_embd, use_bias=config.bias)
 
         self.cost_matrix = jax.random.normal(
-            key=jax.random.key(1), shape=(config.vocab_size, config.vocab_size)
+            key=jax.random.key(1), shape=(config.new_vocab_size, config.vocab_size)
         )
-        self.mu = jnp.ones(config.vocab_size) / config.vocab_size
+        self.mu = jnp.ones(config.new_vocab_size) / config.new_vocab_size
         self.nu = jnp.ones(config.vocab_size) / config.vocab_size
         # Use weight typing
 
@@ -174,7 +175,7 @@ class GPT(eqx.Module):
         # get = lambda embed_and_lin: embed_and_lin[0].weight
         # self.wte_and_lmhead = eqx.nn.Shared((wte, lm_head), where, get)
 
-    @eqx.filter_jit
+    # @eqx.filter_jit
     def __call__(
         self, x, train_mode=True, key=None
     ):  # We don't assert seq length as jax needs static shapes. Check elsewhere.
@@ -183,11 +184,11 @@ class GPT(eqx.Module):
         # Should use better positional embeddings with cos and sin.
         pos = jnp.arange(0, t)
         # pos = jnp.arange(0, self.config.block_size)
+
         p = self.sinkhorn(self.cost_matrix, self.mu, self.nu)
-        x = p[x]
+        x = p[x] * 1/self.mu.shape[0]
 
         tok_emb = jax.numpy.matmul(x, self.wte.weight)
-        print(tok_emb)
         pos_emb = jax.vmap(self.wpe)(pos)
         x = tok_emb + pos_emb
 
@@ -199,7 +200,9 @@ class GPT(eqx.Module):
         x = jax.vmap(self.ln_f)(x)
 
         if train_mode:
-            return jax.vmap(self.lm_head)(x)
+            jax.vmap(self.lm_head)(x)
+            x = jnp.matmul(x, jnp.transpose(p))* 1/self.nu.shape[0]
+            return x
         else:
             return jax.vmap(self.lm_head)(
                 x[[-1], :]
@@ -334,7 +337,7 @@ class GPT(eqx.Module):
 
         return idx
 
-    @eqx.filter_jit
+    # @eqx.filter_jit
     def sparsemax(self, input: jax.Array, marg):
         arr = jnp.sort(input, descending=True)
         y = marg + jnp.arange(1, arr.shape[0] + 1) * arr
@@ -346,15 +349,16 @@ class GPT(eqx.Module):
         thresh = (sum[k_z] - marg) / (k_z + 1)
         return jnp.where(jnp.greater(input - thresh, 0), input - thresh, 0)
 
-    @eqx.filter_jit
+    # @eqx.filter_jit
     def sinkhorn(self, X, mu, nu):
         P = jnp.ones_like(X) / mu.shape[0]  # Divide by v
         Q = jnp.zeros_like(X)
-        for _ in range(0, 0):
+        for _ in range(0,1):
             Y = jax.vmap(GPT.sparsemax, in_axes=(None, 0, 0))(self, X + P, mu)
             P = X + P - Y
             X = jnp.transpose(
                 jax.vmap(GPT.sparsemax, in_axes=(None, 0, 0))(self, jnp.transpose(Y + Q), nu)
             )
             Q = Y + Q - X
+        jax.debug.print("{X}", X=X)
         return X

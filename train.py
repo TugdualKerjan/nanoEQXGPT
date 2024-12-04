@@ -169,7 +169,7 @@ if init_from == "resume":
     def load(filename):
         with open(filename, "rb") as f:
             checkpoint_params = json.loads(f.readline().decode())
-            gptconf = GPTConfig(**checkpoint_params["model_args"])
+            gptconf = GPTConfig(**checkpoint_params["model_args"], new_vocab_size=512)
 
             model = GPT(gptconf, key=jax.random.key(1))
             cost_matrix = model.cost_matrix
@@ -221,9 +221,10 @@ print("✅ Optimizer initialized !")
 
 
 @eqx.filter_jit
-def compute_loss(model, x, y, key):
+def compute_loss(diff_model, x, y, key):
     keys = jax.random.split(key, x.shape[0])
-    logits = jax.vmap(model, in_axes=(0, None, 0))(x, True, keys)
+    # model = eqx.combine(diff_model)
+    logits = jax.vmap(diff_model, in_axes=(0, None, 0))(x, True, keys)
 
     loss = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits,
@@ -266,13 +267,21 @@ if tensorboard_log:
 
 print("👀 Starting run !")
 
+filter_spec = jax.tree_util.tree_map(lambda _: False, model)
+filter_spec = eqx.tree_at(
+    lambda tree: (tree.cost_matrix),
+    filter_spec,
+    replace=(True),
+)
+
+
 x, y = get_batch("train")
 t0 = time.time()
 running_mfu = -1.0
 for local_iter_num in range(iter_num, max_iters + 1):
     # TODO: Chec`k if this is async prefetching the next batch.
     # do a training step
-    if local_iter_num % eval_interval == 0:
+    if local_iter_num % eval_interval == 0 and local_iter_num > 0:
         losses = estimate_loss(model)
         if wandb_log:
             wandb.log(  # type: ignore
@@ -313,7 +322,12 @@ for local_iter_num in range(iter_num, max_iters + 1):
     # for micro_step in range(gradient_accumulation_steps):
     key, k = jax.random.split(key)
     x, y = get_batch("train")
+    
+    # diff_model, static_model = eqx.partition(model, filter_spec)
     loss, grads = eqx.filter_value_and_grad(compute_loss)(model, x, y, k)
+
+    print(grads.cost_matrix)
+
     if wandb_log:
         wandb.log(  # type: ignore
             {
