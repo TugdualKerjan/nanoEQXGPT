@@ -87,6 +87,111 @@ class CausalSelfAttention(eqx.Module):
         return outs
 
 
+class CrossAttention(eqx.Module):
+    dec_attn: nn.Linear
+    enc_attn: nn.Linear
+    c_proj: nn.Linear
+
+    attn_dropout: nn.Dropout
+    resid_dropout: nn.Dropout
+
+    mask: jax.Array
+
+    def __init__(self, config, key=None):
+        key1, key2 = jax.random.split(key)
+        # # Projection for W_1, W_2, W_3 in a batch
+        self.dec_attn = nn.Linear(
+            config.n_embd, config.n_embd, use_bias=config.bias, key=key1
+        )
+        self.enc_attn = nn.Linear(
+            config.n_embd, config.n_embd * 2, use_bias=config.bias, key=key1
+        )
+        # Output proj
+        self.c_proj = nn.Linear(
+            config.n_embd, config.n_embd, use_bias=config.bias, key=key2
+        )
+
+        # # Regularisation
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        # # # self.n_head = config.n_head
+        # # # self.n_embd = config.n_embd
+
+        self.mask = jnp.tril(jnp.ones((config.block_size, config.block_size)))
+
+    @eqx.filter_jit
+    def __call__(
+        self,
+        x,
+        enc_x,
+        key: Optional[jax.Array] = None,
+    ):
+        (t, _) = x.shape
+        q = jax.vmap(self.dec_attn)(x)
+        kv = jax.vmap(self.enc_attn)(enc_x)
+        k, v = jnp.split(kv, 2, axis=-1)
+        # Dim of (seq, head_dim)
+        # Q: (block_size, n_embd)
+        # K: (enc_block_size, n_embd)
+        # V: (enc_block_size, n_embd)
+        kq = jnp.matmul(k, jnp.transpose(q))
+        # KQ: (enc_block_size, block_size)
+
+        kq = jnp.where(
+            jnp.equal(jax.lax.stop_gradient(self.mask[:t, :t]), 0), -jnp.inf, kq
+        )  # Trick to lower compute
+        kq = jax.nn.softmax(kq, axis=-1)
+        # Add att dropout
+        k1, k2 = (None, None) if key is None else jax.random.split(key)
+        kq = self.attn_dropout(kq, key=k1)
+        outs = jnp.matmul(kq, v)
+        outs = jax.vmap(self.c_proj)(outs)
+
+        # Add residual dropout
+        outs = self.resid_dropout(outs, key=k2)
+        return outs
+
+
+class SelfAttention(eqx.Module):
+    c_attn: nn.Linear
+    c_proj: nn.Linear
+
+    attn_dropout: nn.Dropout
+    resid_dropout: nn.Dropout
+
+    def __init__(self, config, key=None):
+        key1, key2 = jax.random.split(key)
+        # # Projection for W_1, W_2, W_3 in a batch
+        self.c_attn = nn.Linear(
+            config.n_embd, config.n_embd * 3, use_bias=config.bias, key=key1
+        )
+        # Output proj
+        self.c_proj = nn.Linear(
+            config.n_embd, config.n_embd, use_bias=config.bias, key=key2
+        )
+
+        # # Regularisation
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+
+    @eqx.filter_jit
+    def __call__(
+        self,
+        x,
+        key: Optional[jax.Array] = None,
+    ):
+        qkv = jax.vmap(self.c_attn)(x)
+        q, k, v = jnp.split(qkv, 3, axis=-1)
+        kq = jnp.matmul(k, jnp.transpose(q))
+        kq = jax.nn.softmax(kq, axis=-1)
+        k1, k2 = (None, None) if key is None else jax.random.split(key)
+        kq = self.attn_dropout(kq, key=k1)
+        outs = jnp.matmul(kq, v)
+        outs = jax.vmap(self.c_proj)(outs)
+        outs = self.resid_dropout(outs, key=k2)
+        return outs
+
+
 class MLP(eqx.Module):
     c_fc: nn.Linear
     c_proj: nn.Linear
@@ -120,13 +225,60 @@ class Block(eqx.Module):
         self.attn = CausalSelfAttention(config, key=key2)
         self.ln_1 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
         self.ln_2 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
-        pass
 
     @eqx.filter_jit
     def __call__(self, x, key=None):
         key1, key2 = (None, None) if key is None else jax.random.split(key)
         y = jax.vmap(self.ln_1)(x)
-        x = self.attn(y, key=key2) + x
+        x = self.attn(y, key=key1) + x
+        y = jax.vmap(self.ln_2)(x)
+        x = self.mlp(y, key=key2) + x
+        return x
+
+
+class EncBlock(eqx.Module):
+    mlp: MLP
+    attn: SelfAttention
+
+    ln_1: nn.LayerNorm
+    ln_2: nn.LayerNorm
+
+    def __init__(self, config, key=None):
+        key1, key2 = jax.random.split(key)
+        self.mlp = MLP(config, key=key1)
+        self.attn = SelfAttention(config, key=key2)
+        self.ln_1 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
+        self.ln_2 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
+
+    @eqx.filter_jit
+    def __call__(self, x, key=None):
+        key1, key2 = (None, None) if key is None else jax.random.split(key)
+        y = jax.vmap(self.ln_1)(x)
+        x = self.attn(y, key=key1) + x
+        y = jax.vmap(self.ln_2)(x)
+        x = self.mlp(y, key=key2) + x
+        return x
+
+
+class CrossBlock(eqx.Module):
+    mlp: MLP
+    attn: CrossAttention
+
+    ln_1: nn.LayerNorm
+    ln_2: nn.LayerNorm
+
+    def __init__(self, config, key=None):
+        key1, key2 = jax.random.split(key)
+        self.mlp = MLP(config, key=key1)
+        self.attn = CrossAttention(config, key=key2)
+        self.ln_1 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
+        self.ln_2 = nn.LayerNorm(config.n_embd, use_bias=config.bias)
+
+    @eqx.filter_jit
+    def __call__(self, x, enc_x, key=None):
+        key1, key2 = (None, None) if key is None else jax.random.split(key)
+        y = jax.vmap(self.ln_1)(x)
+        x = self.attn(y, enc_x, key=key1) + x
         y = jax.vmap(self.ln_2)(x)
         x = self.mlp(y, key=key2) + x
         return x
@@ -140,16 +292,18 @@ class GPT(eqx.Module):
     drop: nn.Dropout
     ln_f: nn.LayerNorm
 
+    enc_wpe: nn.Embedding
+    enc_wte: nn.Embedding
+    enc_block: EncBlock
+    enc_drop: nn.Dropout
+
+    cross_block: CrossBlock
+
     config: GPTConfig = eqx.field(static=True)
 
     def __init__(self, config, key=None):
-        key1, key2, key3, key4 = jax.random.split(key, 4)
+        key1, key2, key3, key4, key5, key6, key7 = jax.random.split(key, 4)
         self.config = config
-        self.wpe = nn.Embedding(config.vocab_size, config.n_embd, key=key2)
-        # Slightly different init as don't have module dict in JAX/EQX
-        self.layers = [
-            Block(config, key=k) for k in jax.random.split(key3, config.n_layer)
-        ]
 
         self.drop = nn.Dropout(config.dropout)
         self.ln_f = nn.LayerNorm(config.n_embd, use_bias=config.bias)
@@ -157,7 +311,23 @@ class GPT(eqx.Module):
         # Use weight typing
 
         self.wte = nn.Embedding(config.vocab_size, config.n_embd, key=key1)
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, use_bias=False, key=key4)
+        self.wpe = nn.Embedding(config.vocab_size, config.n_embd, key=key2)
+
+        # Slightly different init as don't have module dict in JAX/EQX
+        self.layers = [
+            Block(config, key=k) for k in jax.random.split(key3, config.n_layer)
+        ]
+
+        self.lm_head = nn.Linear(
+            config.n_embd, config.vocab_size, use_bias=False, key=key4
+        )
+
+        self.enc_wpe = nn.Embedding(config.enc_vocab_size, config.n_embd, key=key5)
+        self.enc_wte = nn.Embedding(config.enc_vocab_size, config.n_embd, key=key6)
+        self.enc_block = EncBlock(config, key=key7)
+        self.enc_drop = nn.Dropout(config.dropout)
+
+        self.cross_block = CrossBlock(config, key=key7)
 
         # where = lambda embed_and_lin: embed_and_lin[1].weight
         # get = lambda embed_and_lin: embed_and_lin[0].weight
@@ -165,13 +335,18 @@ class GPT(eqx.Module):
 
     @eqx.filter_jit
     def __call__(
-        self, x, train_mode=True, key=None
+        self, x, enc_x, train_mode=True, key=None
     ):  # We don't assert seq length as jax needs static shapes. Check elsewhere.
-        (t,) = x.shape
+        (enc_t,) = enc_x.shape
+        enc_pos = jnp.arange(0, enc_t)
+        enc_tok_emb = jax.vmap(self.enc_wte)(enc_x)
+        enc_pos_emb = jax.vmap(self.enc_wpe)(enc_pos)
+        enc_x = enc_tok_emb + enc_pos_emb
+        enc_x = self.enc_drop(enc_x, key=key)
+        enc_x = self.enc_block(x, key)
 
-        # Should use better positional embeddings with cos and sin.
+        (t,) = x.shape
         pos = jnp.arange(0, t)
-        # pos = jnp.arange(0, self.config.block_size)
         tok_emb = jax.vmap(self.wte)(x)
         pos_emb = jax.vmap(self.wpe)(pos)
         x = tok_emb + pos_emb
@@ -180,6 +355,8 @@ class GPT(eqx.Module):
         for layer in self.layers:
             key, k = (None, None) if key is None else jax.random.split(key)
             x = layer(x, k)
+
+        x = self.cross_block(x, enc_x, key=key)
 
         x = jax.vmap(self.ln_f)(x)
 
