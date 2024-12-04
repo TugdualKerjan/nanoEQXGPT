@@ -9,10 +9,10 @@ log_interval = 5 # don't print too too often
 # we expect to overfit on this small dataset, so only save when val improves
 always_save_checkpoint = False
 
-wandb_log = False # override via command line if you like
-tensorboard_log = True # override via command line if you like
-log_project = "exp3"
-log_run_name = "train_new_tokenzie"  # 'run' + str(time.time())
+wandb_log = True # override via command line if you like
+tensorboard_log = False # override via command line if you like
+log_project = "exp4"
+log_run_name = "enc_dec_standard"  # 'run' + str(time.time())
 
 dataset = 'tinystories'
 gradient_accumulation_steps = 1

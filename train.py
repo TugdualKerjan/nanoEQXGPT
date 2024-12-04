@@ -10,7 +10,7 @@ import numpy as np
 import optax
 import tiktoken
 import tensorboardX
-from model import GPTConfig, GPT
+from model import CrossBlock, EncBlock, GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
@@ -37,7 +37,7 @@ n_layer = 12
 n_head = 12
 n_embd = 768
 dropout = 0.0  # for pretraining 0 is good, for finetuning try 0.1+
-bias = False  # do we use bias inside LayerNorm and Linear layers?
+bias = True  # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
 learning_rate = 6e-4  # max learning rate
 max_iters = 600000  # total number of training iterations
@@ -170,27 +170,40 @@ if init_from == "resume":
         with open(filename, "rb") as f:
             checkpoint_params = json.loads(f.readline().decode())
             gptconf = GPTConfig(**checkpoint_params["model_args"])
+            model = GPT(gptconf, key=jax.random.key(1))
+            lookup = {
+                "enc_wpe": model.enc_wpe,
+                "enc_wte": model.enc_wte,
+                "enc_block": model.enc_block,
+                "enc_drop": model.enc_drop,
+                "cross_block": model.cross_block,
+            }
+            
+            def split(path, x):
+                key_path = jax.tree_util.keystr(path)
+                
+                for keyword in lookup.keys():
+                    if keyword in key_path:
+                        print(key_path)
+                        return None
+                return x
 
-            filter_spec = jax.tree_util.tree_map(lambda _: False, grads)
-            filter_spec = eqx.tree_at(
-                lambda tree: (
-                    tree.enc_wpe,
-                    tree.enc_wte,
-                    tree.enc_block,
-                    tree.enc_drop,
-                    tree.cross_block,
-                ),
-                filter_spec,
-                replace=(True, True, True, True, True),
-            )
-
-            # new_parts, original_parts = eqx.partition(
-            #     GPT(gptconf, key=jax.random.key(1)), filter_spec
-            # )
+            model = jax.tree_util.tree_map_with_path(split, model, is_leaf=lambda x: isinstance(x, (CrossBlock, EncBlock, eqx.nn.Linear, eqx.nn.Embedding, eqx.nn.Dropout)))
 
             model = eqx.tree_deserialise_leaves(
-                f, GPT(gptconf, key=jax.random.key(1)), filter_spec
+                f,  model
             )
+            
+            def unsplit(path, x):
+                key_path = jax.tree_util.keystr(path)
+                
+                for keyword, value in lookup.items():
+                    if keyword in key_path:
+                        return value
+                return x
+            
+            model = jax.tree_util.tree_map_with_path(unsplit, model, is_leaf=lambda x: x is None)
+
 
             return (
                 model,
@@ -227,7 +240,7 @@ print("✅ Optimizer initialized !")
 @eqx.filter_jit
 def compute_loss(model, x, y, key):
     keys = jax.random.split(key, x.shape[0])
-    logits = jax.vmap(model, in_axes=(0, None, 0))(x, True, keys)
+    logits = jax.vmap(model, in_axes=(0, 0, None, 0))(x, x, True, keys)
 
     loss = optax.softmax_cross_entropy_with_integer_labels(
         logits=logits,

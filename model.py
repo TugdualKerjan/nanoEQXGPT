@@ -12,6 +12,7 @@ import jax
 @dataclass
 class GPTConfig:
     block_size: int = 100
+    enc_vocab_size: int = 50304
     vocab_size: int = (
         50304  # GPT-2 vocab_size of 50257, padded up to nearest multiple of 64 for efficiency
     )
@@ -302,7 +303,7 @@ class GPT(eqx.Module):
     config: GPTConfig = eqx.field(static=True)
 
     def __init__(self, config, key=None):
-        key1, key2, key3, key4, key5, key6, key7 = jax.random.split(key, 4)
+        key1, key2, key3, key4, key5, key6, key7 = jax.random.split(key, 7)
         self.config = config
 
         self.drop = nn.Dropout(config.dropout)
@@ -343,7 +344,7 @@ class GPT(eqx.Module):
         enc_pos_emb = jax.vmap(self.enc_wpe)(enc_pos)
         enc_x = enc_tok_emb + enc_pos_emb
         enc_x = self.enc_drop(enc_x, key=key)
-        enc_x = self.enc_block(x, key)
+        enc_x = self.enc_block(enc_x, key)
 
         (t,) = x.shape
         pos = jnp.arange(0, t)
