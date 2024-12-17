@@ -12,7 +12,7 @@ always_save_checkpoint = False
 wandb_log = True # override via command line if you like
 tensorboard_log = False # override via command line if you like
 log_project = "exp4"
-log_run_name = "enc_dec_standard_small_and_large"  # 'run' + str(time.time())
+log_run_name = "enc_dec_standard_small_and_large_cross_first"  # 'run' + str(time.time())
 
 dataset = 'new_tinystories'
 gradient_accumulation_steps = 1

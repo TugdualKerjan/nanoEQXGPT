@@ -353,11 +353,11 @@ class GPT(eqx.Module):
         x = tok_emb + pos_emb
 
         x = self.drop(x, key=key)
+        x = self.cross_block(x, enc_x, key=key)
         for layer in self.layers:
             key, k = (None, None) if key is None else jax.random.split(key)
             x = layer(x, k)
 
-        x = self.cross_block(x, enc_x, key=key)
 
         x = jax.vmap(self.ln_f)(x)
 
