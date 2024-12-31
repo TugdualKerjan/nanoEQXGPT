@@ -10,6 +10,7 @@ import numpy as np
 import optax
 import tiktoken
 import tensorboardX
+from tokenizers import Tokenizer
 from model import CrossBlock, EncBlock, GPTConfig, GPT
 
 # -----------------------------------------------------------------------------
@@ -107,6 +108,16 @@ def get_batch(split: str):
 
     return x, enc_x, y
 
+x, x_enc,  y = get_batch("train")
+
+enc = tiktoken.get_encoding("gpt2")
+encode = lambda s: enc.encode(s, allowed_special={"<|endoftext|>"})
+decode = lambda l: enc.decode(l)
+print(x.shape)
+print(decode(x_enc[0]))
+
+tokenizer = Tokenizer.from_file("data/new_tinystories/tokenizer-tinystories.json")
+print(tokenizer.decode(x[0]))
 
 def convert_model_to_dtype(model, dtype: str):
     def convert_pytree_to_dtype(pytree, dtype):
@@ -288,7 +299,8 @@ if tensorboard_log:
 
 print("👀 Starting run !")
 
-x, x_enc,  y = get_batch("train")
+
+
 t0 = time.time()
 running_mfu = -1.0
 for local_iter_num in range(iter_num, max_iters + 1):

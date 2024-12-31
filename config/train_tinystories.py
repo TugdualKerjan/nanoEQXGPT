@@ -2,17 +2,17 @@
 # good for debugging and playing on macbooks and such
 
 out_path = 'out-tinystories/model.eqx'
-eval_interval = 250 # keep frequent because we'll overfit
+eval_interval = 1000 # keep frequent because we'll overfit
 eval_iters = 20
 log_interval = 5 # don't print too too often
 
 # we expect to overfit on this small dataset, so only save when val improves
 always_save_checkpoint = False
 
-wandb_log = True # override via command line if you like
-tensorboard_log = False # override via command line if you like
-log_project = "exp4"
-log_run_name = "enc_dec_standard"  # 'run' + str(time.time())
+wandb_log = False # override via command line if you like
+tensorboard_log = True # override via command line if you like
+log_project = "exp5"
+log_run_name = "enc_dec_standard_scratch"  # 'run' + str(time.time())
 
 dataset = 'tinystories'
 gradient_accumulation_steps = 1
